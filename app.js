@@ -450,6 +450,15 @@ function loadToForm() {
 
   if (data.submitUrl) { state.currentQRUrl = ""; generateQR(); }
 
+  // 이전에 생성해 둔 메시지/반 선택 상태는 새로 불러온 값과 맞지 않으므로 초기화
+  state.currentMessage  = "";
+  state.currentFormData = null;
+  const preview = document.getElementById("message-preview");
+  preview.textContent = "내용을 수정한 뒤 '메시지 생성'을 다시 눌러주세요.";
+  preview.classList.add("empty");
+  document.getElementById("btn-copy-msg").disabled = true;
+  document.getElementById("class-selector-card").style.display = "none";
+
   closeModalDirect();
   document.querySelector(".card")?.scrollIntoView({ behavior: "smooth", block: "start" });
   showToast("✅ 폼에 불러왔습니다! 수정 후 '메시지 생성'을 눌러주세요.");
