@@ -269,18 +269,20 @@ function generateQR() {
 function generateMessage() {
   const url       = document.getElementById("f-submit-url").value.trim();
   const classDate = document.getElementById("f-class-date").value;
+  const deadDate  = document.getElementById("f-deadline-date").value;
   const deadTime  = document.getElementById("f-deadline-time").value;
   const nextDate  = document.getElementById("f-next-date").value;
   const nextTopic = document.getElementById("f-next-topic").value.trim();
   const extraNote = document.getElementById("f-extra-note").value.trim();
 
-  if (!url || !classDate || !deadTime || !nextDate || !nextTopic) {
+  if (!url || !classDate || !deadDate || !deadTime || !nextDate || !nextTopic) {
     alert("⚠️ 필수 항목(*)을 모두 입력해 주세요.");
     return;
   }
 
   const classDateFmt = formatDate(classDate);
   const nextDateFmt  = formatDate(nextDate);
+  const deadDateFmt  = formatDate(deadDate);
   const deadTimeFmt  = formatTime(deadTime);
 
   const msgLines = [
@@ -296,7 +298,7 @@ function generateMessage() {
     "🔗 제출 링크",
     url,
     "",
-    `⏰ 제출 마감 : ${classDateFmt} ${deadTimeFmt}까지`,
+    `⏰ 제출 마감 : ${deadDateFmt} ${deadTimeFmt}까지`,
     "",
     "📌 아래 QR코드로도 제출 가능합니다 👇",
     "   (QR코드는 별도 이미지 참고)",
@@ -320,7 +322,7 @@ function generateMessage() {
   msgLines.push("", "수업 관련 문의는 선생님께 언제든지 연락 주세요! 🙏");
 
   state.currentMessage  = msgLines.join("\n");
-  state.currentFormData = { classDate, deadTime, nextDate, nextTopic, submitUrl: url, extraNote };
+  state.currentFormData = { classDate, deadDate, deadTime, nextDate, nextTopic, submitUrl: url, extraNote };
 
   // 미리보기 업데이트
   const preview = document.getElementById("message-preview");
@@ -413,7 +415,7 @@ function openModal(docId, classId) {
 
   const meta = document.getElementById("modal-meta");
   meta.innerHTML = [
-    data.deadTime  ? `<span class="badge badge-purple">⏰ 마감 ${formatTime(data.deadTime)}</span>` : "",
+    data.deadTime  ? `<span class="badge badge-purple">⏰ 마감 ${data.deadDate ? formatDate(data.deadDate, "short") + " " : ""}${formatTime(data.deadTime)}</span>` : "",
     data.nextDate  ? `<span class="badge badge-teal">📅 다음 ${formatDate(data.nextDate, "short")}</span>` : "",
     data.nextTopic ? `<span class="badge" style="background:#f0fdf4;color:#059669;">📚 ${escHtml(data.nextTopic)}</span>` : "",
   ].join("");
@@ -438,6 +440,8 @@ function loadToForm() {
   if (!data) return;
 
   if (data.classDate)  document.getElementById("f-class-date").value     = data.classDate;
+  if (data.deadDate || data.classDate)
+    document.getElementById("f-deadline-date").value = data.deadDate || data.classDate;
   if (data.deadTime)   document.getElementById("f-deadline-time").value   = data.deadTime;
   if (data.submitUrl)  document.getElementById("f-submit-url").value      = data.submitUrl;
   if (data.nextDate)   document.getElementById("f-next-date").value       = data.nextDate;
@@ -519,7 +523,9 @@ function resetForm() {
 
 function setDefaultDates() {
   const today = new Date();
-  document.getElementById("f-class-date").value = today.toISOString().split("T")[0];
+  const todayStr = today.toISOString().split("T")[0];
+  document.getElementById("f-class-date").value = todayStr;
+  document.getElementById("f-deadline-date").value = todayStr;
   const next = new Date(today);
   next.setDate(next.getDate() + 7);
   document.getElementById("f-next-date").value = next.toISOString().split("T")[0];
