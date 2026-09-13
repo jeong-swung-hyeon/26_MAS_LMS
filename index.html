@@ -201,13 +201,23 @@
 
 <!-- ═══════ 히스토리 상세 모달 ═══════ -->
 <div class="modal-overlay" id="history-modal" onclick="window._app.closeModal(event)">
-  <div class="modal" id="modal-box">
+  <div class="modal" id="modal-box" style="width:min(560px,94vw);">
     <div class="modal-title" id="modal-title">📋 저장된 메시지</div>
-    <div class="message-box" id="modal-message-text" style="max-height:320px;overflow-y:auto;"></div>
-    <div class="modal-actions">
-      <button class="btn btn-green" onclick="window._app.copyModalMessage()">📋 복사</button>
+
+    <!-- 저장된 정보 요약 뱃지 -->
+    <div id="modal-meta" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;"></div>
+
+    <div class="message-box" id="modal-message-text"
+         style="max-height:300px;overflow-y:auto;font-size:13px;"></div>
+
+    <div class="modal-actions" style="flex-wrap:wrap;">
+      <!-- 폼에 불러오기: 핵심 기능 -->
+      <button class="btn btn-primary" onclick="window._app.loadToForm()" style="flex:1;min-width:140px;">
+        ✏️ 폼에 불러와서 수정
+      </button>
+      <button class="btn btn-green btn-sm" onclick="window._app.copyModalMessage()">📋 복사</button>
       <button class="btn btn-danger btn-sm" id="modal-delete-btn">🗑️ 삭제</button>
-      <button class="btn btn-secondary" onclick="window._app.closeModalDirect()">닫기</button>
+      <button class="btn btn-secondary btn-sm" onclick="window._app.closeModalDirect()">닫기</button>
     </div>
   </div>
 </div>

@@ -423,6 +423,14 @@ function openModal(docId) {
   document.getElementById("modal-message-text").textContent = data.messageText || "";
   document.getElementById("modal-delete-btn").onclick = () => deleteHistoryItem(docId);
 
+  // 메타 정보 뱃지
+  const meta = document.getElementById("modal-meta");
+  meta.innerHTML = [
+    data.deadTime  ? `<span class="badge badge-purple">⏰ 마감 ${formatTime(data.deadTime)}</span>` : "",
+    data.nextDate  ? `<span class="badge badge-teal">📅 다음 ${formatDate(data.nextDate)}</span>` : "",
+    data.nextTopic ? `<span class="badge" style="background:#f0fdf4;color:#059669;">📚 ${escHtml(data.nextTopic)}</span>` : "",
+  ].join("");
+
   document.getElementById("history-modal").classList.add("open");
 }
 
@@ -437,6 +445,34 @@ function closeModalDirect() {
 function copyModalMessage() {
   const text = document.getElementById("modal-message-text").textContent;
   copyToClipboard(text);
+}
+
+// 히스토리 데이터를 입력 폼에 불러오기
+function loadToForm() {
+  const data = window._historyDocs?.[state.modalDocId];
+  if (!data) return;
+
+  // 폼 필드에 저장된 값 채우기
+  if (data.classDate)  document.getElementById("f-class-date").value    = data.classDate;
+  if (data.deadTime)   document.getElementById("f-deadline-time").value  = data.deadTime;
+  if (data.submitUrl)  document.getElementById("f-submit-url").value     = data.submitUrl;
+  if (data.nextDate)   document.getElementById("f-next-date").value      = data.nextDate;
+  if (data.nextTopic)  document.getElementById("f-next-topic").value     = data.nextTopic;
+  document.getElementById("f-extra-note").value = data.extraNote || "";
+
+  // QR도 자동 재생성
+  if (data.submitUrl) {
+    state.currentQRUrl = ""; // 강제 재생성
+    generateQR();
+  }
+
+  // 모달 닫기
+  closeModalDirect();
+
+  // 폼 상단으로 부드럽게 스크롤
+  document.querySelector(".card")?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  showToast("✅ 폼에 불러왔습니다! 수정 후 '메시지 생성 & 저장'을 눌러주세요.");
 }
 
 async function deleteHistoryItem(docId) {
@@ -575,4 +611,5 @@ window._app = {
   closeModal,
   closeModalDirect,
   copyModalMessage,
+  loadToForm,
 };
