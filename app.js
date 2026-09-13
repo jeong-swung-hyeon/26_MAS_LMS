@@ -23,6 +23,7 @@ const state = {
   currentFormData:        null, // 저장용 폼 데이터
   modalDocId:             null,
   modalClassId:           null,
+  editingSourceDocId:     null, // 히스토리에서 불러와 수정 중인 원본 메시지 docId
 };
 
 const CLASS_COLORS = [
@@ -229,9 +230,17 @@ async function loadSidebarHistory() {
       const data = d.data();
       const dateStr  = data.classDate ? formatDate(data.classDate, "short") : "-";
       const topicStr = data.nextTopic ? escHtml(data.nextTopic) : "";
+      const timeStr  = data.createdAt?.toDate
+        ? data.createdAt.toDate().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
+        : "";
+      const revisionBadge = data.revisionOf
+        ? `<span class="badge badge-purple">✏️ 수정본</span>` : "";
       return `
         <div class="sidebar-history-item" onclick="window._app.openModal('${d.id}','${classId}')">
-          <span class="sidebar-history-date">${dateStr}</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="sidebar-history-date">${dateStr}${timeStr ? ` · ${timeStr}` : ""}</span>
+            ${revisionBadge}
+          </div>
           <span class="sidebar-history-topic">${topicStr}</span>
         </div>`;
     }).join("");
@@ -322,7 +331,10 @@ function generateMessage() {
   msgLines.push("", "수업 관련 문의는 선생님께 언제든지 연락 주세요! 🙏");
 
   state.currentMessage  = msgLines.join("\n");
-  state.currentFormData = { classDate, deadDate, deadTime, nextDate, nextTopic, submitUrl: url, extraNote };
+  state.currentFormData = {
+    classDate, deadDate, deadTime, nextDate, nextTopic, submitUrl: url, extraNote,
+    revisionOf: state.editingSourceDocId || null,
+  };
 
   // 미리보기 업데이트
   const preview = document.getElementById("message-preview");
@@ -386,7 +398,8 @@ async function saveToSelectedClasses() {
 
     // 반 선택 카드 숨기기
     document.getElementById("class-selector-card").style.display = "none";
-    state.currentFormData = null;
+    state.currentFormData    = null;
+    state.editingSourceDocId = null;
 
   } catch (e) {
     alert("저장 실패: " + e.message);
@@ -415,6 +428,7 @@ function openModal(docId, classId) {
 
   const meta = document.getElementById("modal-meta");
   meta.innerHTML = [
+    data.revisionOf ? `<span class="badge" style="background:#fef3c7;color:#b45309;">✏️ 수정본</span>` : "",
     data.deadTime  ? `<span class="badge badge-purple">⏰ 마감 ${data.deadDate ? formatDate(data.deadDate, "short") + " " : ""}${formatTime(data.deadTime)}</span>` : "",
     data.nextDate  ? `<span class="badge badge-teal">📅 다음 ${formatDate(data.nextDate, "short")}</span>` : "",
     data.nextTopic ? `<span class="badge" style="background:#f0fdf4;color:#059669;">📚 ${escHtml(data.nextTopic)}</span>` : "",
@@ -438,6 +452,9 @@ function copyModalMessage() {
 function loadToForm() {
   const data = window._historyDocs?.[state.modalDocId];
   if (!data) return;
+
+  // 수정본이 저장될 때 원본을 계속 가리키도록, 이미 수정본이면 그 원본을 그대로 이어받음
+  state.editingSourceDocId = data.revisionOf || state.modalDocId;
 
   if (data.classDate)  document.getElementById("f-class-date").value     = data.classDate;
   if (data.deadDate || data.classDate)
@@ -525,9 +542,10 @@ function resetForm() {
   document.getElementById("qr-url-hint").textContent = "";
   document.getElementById("class-selector-card").style.display = "none";
 
-  state.currentMessage  = "";
-  state.currentQRUrl    = "";
-  state.currentFormData = null;
+  state.currentMessage      = "";
+  state.currentQRUrl        = "";
+  state.currentFormData     = null;
+  state.editingSourceDocId  = null;
 }
 
 function setDefaultDates() {
