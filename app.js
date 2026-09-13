@@ -1,6 +1,8 @@
 /**
  * 자기평가지 제출 안내 메시지 관리 시스템
- * app.js — Firebase Firestore + QR + 메시지 생성 로직
+ * app.js
+ *
+ * 흐름: 폼 작성 → 메시지 생성(미리보기) → 반 선택(체크박스) → 저장
  */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
@@ -10,44 +12,32 @@ import {
   query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
-// ── Firebase 설정 import ──
-// firebase-config.js 에서 본인 프로젝트 설정값을 입력해 주세요
 let db;
 
-// ──────────────────────────────────────────────────
-//  앱 상태
-// ──────────────────────────────────────────────────
+// ─── 앱 상태 ───────────────────────────────────────
 const state = {
-  classes:         [],   // { id, name, subject, color }
-  selectedClassId: null,
-  currentMessage:  "",
-  currentQRUrl:    "",
-  modalDocId:      null,
+  classes:                [],   // { id, name, subject, color }
+  selectedHistoryClassId: null, // 사이드바에서 선택된 반 (히스토리 조회용)
+  currentMessage:         "",   // 생성된 메시지 텍스트
+  currentQRUrl:           "",
+  currentFormData:        null, // 저장용 폼 데이터
+  modalDocId:             null,
+  modalClassId:           null,
 };
 
-// 반 색상 팔레트
 const CLASS_COLORS = [
   "#7c3aed","#06b6d4","#10b981","#f59e0b",
   "#ec4899","#3b82f6","#ef4444","#8b5cf6",
 ];
 
-// ──────────────────────────────────────────────────
-//  Firebase 초기화
-// ──────────────────────────────────────────────────
+// ─── Firebase 초기화 ───────────────────────────────
 async function initFirebase() {
   try {
-    // firebase-config.js 에서 설정값 로드
     const module = await import("./firebase-config.js");
     const config = module.default;
-
-    if (config.apiKey === "YOUR_API_KEY") {
-      showConfigError();
-      return false;
-    }
-
+    if (config.apiKey === "YOUR_API_KEY") { showConfigError(); return false; }
     const app = initializeApp(config);
     db = getFirestore(app);
-
     setConnectionBadge(true);
     return true;
   } catch (e) {
@@ -61,33 +51,24 @@ function setConnectionBadge(ok) {
   const badge = document.getElementById("connection-badge");
   if (ok) {
     badge.textContent = "Firebase 연결됨";
-    badge.className = "badge badge-teal";
+    badge.className   = "badge badge-teal";
   } else {
     badge.textContent = "Firebase 미연결";
-    badge.className = "badge";
-    badge.style.background = "rgba(239,68,68,0.2)";
-    badge.style.color = "#ef4444";
+    badge.className   = "badge";
+    badge.style.background = "rgba(220,38,38,0.15)";
+    badge.style.color      = "#dc2626";
   }
 }
 
 function showConfigError() {
   setConnectionBadge(false);
-  document.getElementById("main-content").innerHTML = `
-    <div class="empty-state" style="max-width:520px;margin:auto;">
-      <div class="empty-icon">⚙️</div>
-      <p style="font-size:16px;font-weight:700;margin-bottom:8px;">Firebase 설정이 필요합니다</p>
-      <p style="color:var(--text-secondary);line-height:1.8;">
-        <code style="background:rgba(255,255,255,0.08);padding:2px 6px;border-radius:4px;">firebase-config.js</code> 파일을 열어<br/>
-        본인의 Firebase 프로젝트 설정값을 입력해 주세요.<br/><br/>
-        Firebase 콘솔 → 프로젝트 설정 → 내 앱 → SDK 설정 및 구성
-      </p>
-    </div>
-  `;
+  document.getElementById("class-list").innerHTML =
+    `<div class="history-empty" style="color:var(--red);font-size:12px;padding:12px;">
+       firebase-config.js에<br/>설정값을 입력해 주세요.
+     </div>`;
 }
 
-// ──────────────────────────────────────────────────
-//  반(Class) CRUD
-// ──────────────────────────────────────────────────
+// ─── 반 목록 로드 ──────────────────────────────────
 async function loadClasses() {
   if (!db) return;
   try {
@@ -96,21 +77,25 @@ async function loadClasses() {
     );
     state.classes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
     renderClassList();
+    renderClassCheckboxes();
   } catch (e) {
     console.error("반 목록 로드 실패:", e);
   }
 }
 
+// 사이드바 반 목록 렌더링
 function renderClassList() {
   const el = document.getElementById("class-list");
   if (state.classes.length === 0) {
-    el.innerHTML = `<div class="history-empty" style="padding:16px 8px;">아직 추가된 반이 없습니다.<br/>아래에서 새 반을 추가하세요.</div>`;
+    el.innerHTML = `<div class="history-empty" style="font-size:12px;padding:12px;">
+                      아직 추가된 반이 없습니다.
+                    </div>`;
     return;
   }
   el.innerHTML = state.classes.map(cls => `
-    <div class="class-item ${cls.id === state.selectedClassId ? 'active' : ''}"
+    <div class="class-item ${cls.id === state.selectedHistoryClassId ? 'active' : ''}"
          id="class-item-${cls.id}"
-         onclick="window._app.selectClass('${cls.id}')">
+         onclick="window._app.selectHistoryClass('${cls.id}')">
       <div class="class-dot" style="background:${cls.color || '#7c3aed'}"></div>
       <span class="class-name">${escHtml(cls.name)}</span>
       <span class="class-count" id="count-${cls.id}">-</span>
@@ -118,9 +103,29 @@ function renderClassList() {
               onclick="event.stopPropagation(); window._app.deleteClass('${cls.id}','${escHtml(cls.name)}')">✕</button>
     </div>
   `).join("");
-
-  // 메시지 수 표시
   state.classes.forEach(cls => loadMessageCount(cls.id));
+}
+
+// 메인 영역 체크박스 렌더링 (카드 3)
+function renderClassCheckboxes() {
+  const el = document.getElementById("class-checkboxes");
+  if (!el) return;
+  if (state.classes.length === 0) {
+    el.innerHTML = `<p class="text-muted" style="padding:4px 0;">
+                      먼저 사이드바에서 반을 추가하세요.
+                    </p>`;
+    return;
+  }
+  el.innerHTML = state.classes.map(cls => `
+    <label class="class-checkbox-label" for="chk-${cls.id}">
+      <input type="checkbox" class="class-checkbox" id="chk-${cls.id}" value="${cls.id}" checked />
+      <span class="class-checkbox-inner" style="--cls-color:${cls.color || '#7c3aed'}">
+        <span class="class-checkbox-dot" style="background:${cls.color || '#7c3aed'}"></span>
+        <span class="class-checkbox-name">${escHtml(cls.name)}</span>
+        ${cls.subject ? `<span class="class-checkbox-sub">${escHtml(cls.subject)}</span>` : ""}
+      </span>
+    </label>
+  `).join("");
 }
 
 async function loadMessageCount(classId) {
@@ -132,6 +137,7 @@ async function loadMessageCount(classId) {
   } catch {}
 }
 
+// ─── 반 추가 / 삭제 ───────────────────────────────
 async function addClass() {
   const name    = document.getElementById("new-class-name").value.trim();
   const subject = document.getElementById("new-class-subject").value.trim();
@@ -139,38 +145,35 @@ async function addClass() {
   if (!db)   { alert("Firebase가 연결되지 않았습니다."); return; }
 
   const btn = document.getElementById("btn-add-class");
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
 
   try {
     const color = CLASS_COLORS[state.classes.length % CLASS_COLORS.length];
-    const docRef = await addDoc(collection(db, "classes"), {
+    await addDoc(collection(db, "classes"), {
       name, subject, color, createdAt: serverTimestamp()
     });
     document.getElementById("new-class-name").value    = "";
     document.getElementById("new-class-subject").value = "";
     await loadClasses();
-    selectClass(docRef.id);
   } catch (e) {
     alert("반 추가 실패: " + e.message);
   } finally {
-    btn.disabled = false; btn.innerHTML = "＋ 반 추가";
+    btn.disabled = false;
+    btn.innerHTML = "＋ 반 추가";
   }
 }
 
 async function deleteClass(classId, className) {
   if (!confirm(`"${className}" 반을 삭제하시겠습니까?\n메시지 히스토리도 모두 삭제됩니다.`)) return;
   if (!db) return;
-
   try {
-    // 하위 messages 컬렉션 삭제
     const msgsSnap = await getDocs(collection(db, "classes", classId, "messages"));
     await Promise.all(msgsSnap.docs.map(d => deleteDoc(d.ref)));
-    // 반 문서 삭제
     await deleteDoc(doc(db, "classes", classId));
-
-    if (state.selectedClassId === classId) {
-      state.selectedClassId = null;
-      showEmptyState();
+    if (state.selectedHistoryClassId === classId) {
+      state.selectedHistoryClassId = null;
+      document.getElementById("sidebar-history-section").style.display = "none";
     }
     await loadClasses();
   } catch (e) {
@@ -178,83 +181,92 @@ async function deleteClass(classId, className) {
   }
 }
 
-function selectClass(classId) {
-  state.selectedClassId = classId;
-  const cls = state.classes.find(c => c.id === classId);
-  if (!cls) return;
+// ─── 사이드바 히스토리 ─────────────────────────────
+function selectHistoryClass(classId) {
+  state.selectedHistoryClassId = classId;
 
-  // 사이드바 활성 표시 업데이트
   document.querySelectorAll(".class-item").forEach(el => el.classList.remove("active"));
   const item = document.getElementById(`class-item-${classId}`);
   if (item) item.classList.add("active");
 
-  // 워크스페이스 표시
-  document.getElementById("empty-state").style.display = "none";
-  const ws = document.getElementById("class-workspace");
-  ws.style.display = "flex";
+  const cls = state.classes.find(c => c.id === classId);
+  document.getElementById("sidebar-history-class-name").textContent = cls?.name || "";
+  document.getElementById("sidebar-history-class-dot").style.background = cls?.color || "#7c3aed";
+  document.getElementById("sidebar-history-section").style.display = "block";
 
-  document.getElementById("ws-class-name").textContent    = cls.name;
-  document.getElementById("ws-class-subject").textContent = cls.subject || "";
-  document.getElementById("ws-class-badge").textContent   = cls.subject || cls.name;
-  document.getElementById("ws-class-badge").style.background = hexToRgba(cls.color || "#7c3aed", 0.2);
-  document.getElementById("ws-class-badge").style.color      = cls.color || "#7c3aed";
-
-  // 오늘 날짜 기본값
-  setDefaultDates();
-  resetPreview();
-  loadHistory();
+  loadSidebarHistory();
 }
 
-function showEmptyState() {
-  document.getElementById("empty-state").style.display  = "flex";
-  document.getElementById("class-workspace").style.display = "none";
+async function loadSidebarHistory() {
+  const classId = state.selectedHistoryClassId;
+  if (!db || !classId) return;
+
+  const el = document.getElementById("sidebar-history-list");
+  el.innerHTML = `<div class="history-empty" style="font-size:12px;padding:8px;">불러오는 중…</div>`;
+
+  try {
+    const snap = await getDocs(
+      query(
+        collection(db, "classes", classId, "messages"),
+        orderBy("createdAt", "desc")
+      )
+    );
+
+    if (snap.empty) {
+      el.innerHTML = `<div class="history-empty" style="font-size:12px;padding:8px;">
+                        저장된 메시지가 없습니다.
+                      </div>`;
+      return;
+    }
+
+    // 캐시 저장
+    window._historyDocs = window._historyDocs || {};
+    snap.docs.forEach(d => {
+      window._historyDocs[d.id] = { ...d.data(), _classId: classId };
+    });
+
+    el.innerHTML = snap.docs.map(d => {
+      const data = d.data();
+      const dateStr  = data.classDate ? formatDate(data.classDate, "short") : "-";
+      const topicStr = data.nextTopic ? escHtml(data.nextTopic) : "";
+      return `
+        <div class="sidebar-history-item" onclick="window._app.openModal('${d.id}','${classId}')">
+          <span class="sidebar-history-date">${dateStr}</span>
+          <span class="sidebar-history-topic">${topicStr}</span>
+        </div>`;
+    }).join("");
+
+  } catch (e) {
+    el.innerHTML = `<div style="color:var(--red);font-size:12px;padding:8px;">로드 실패</div>`;
+  }
 }
 
-function setDefaultDates() {
-  const today = new Date();
-  const todayStr = today.toISOString().split("T")[0];
-  document.getElementById("f-class-date").value = todayStr;
-
-  // 다음 수업: 기본 7일 후
-  const next = new Date(today);
-  next.setDate(next.getDate() + 7);
-  document.getElementById("f-next-date").value = next.toISOString().split("T")[0];
-}
-
-// ──────────────────────────────────────────────────
-//  QR 코드 생성
-// ──────────────────────────────────────────────────
+// ─── QR 코드 생성 ──────────────────────────────────
 function generateQR() {
   const url = document.getElementById("f-submit-url").value.trim();
   if (!url) { alert("제출 링크를 먼저 입력해 주세요."); return; }
 
   const container = document.getElementById("qr-canvas-container");
-  container.innerHTML = ""; // 기존 QR 제거
+  container.innerHTML = "";
 
   try {
     new QRCode(container, {
-      text: url,
-      width:  180,
-      height: 180,
-      colorDark:  "#ffffff",
+      text:  url,
+      width: 180, height: 180,
+      colorDark:  "#1e1b3a",
       colorLight: "transparent",
       correctLevel: QRCode.CorrectLevel.M,
     });
     state.currentQRUrl = url;
     document.getElementById("qr-url-hint").textContent = url;
-
-    // 다운로드 버튼 활성화
     document.getElementById("btn-download-qr").disabled = false;
   } catch (e) {
-    container.innerHTML = `<div class="qr-placeholder" style="color:var(--red);">QR 생성 실패<br/>${e.message}</div>`;
+    container.innerHTML = `<div class="qr-placeholder" style="color:var(--red);">QR 생성 실패</div>`;
   }
 }
 
-// ──────────────────────────────────────────────────
-//  메시지 생성 & Firestore 저장
-// ──────────────────────────────────────────────────
-async function generateMessage() {
-  // 유효성 검사
+// ─── 메시지 생성 (저장 X, 미리보기만) ────────────────
+function generateMessage() {
   const url       = document.getElementById("f-submit-url").value.trim();
   const classDate = document.getElementById("f-class-date").value;
   const deadTime  = document.getElementById("f-deadline-time").value;
@@ -267,26 +279,21 @@ async function generateMessage() {
     return;
   }
 
-  if (!db) { alert("Firebase가 연결되지 않았습니다."); return; }
-
-  // 날짜 포맷
-  const cls        = state.classes.find(c => c.id === state.selectedClassId);
   const classDateFmt = formatDate(classDate);
   const nextDateFmt  = formatDate(nextDate);
   const deadTimeFmt  = formatTime(deadTime);
 
-  // 카카오톡 공지 스타일 메시지 생성
   const msgLines = [
     "📋 [자기평가지 제출 안내]",
     "",
-    `안녕하세요! ${cls ? cls.name + " " : ""}오늘 수업 수고하셨습니다 😊`,
+    "안녕하세요! 오늘 수업 수고하셨습니다 😊",
     `오늘(${classDateFmt}) 수업에 참여해 주셔서 감사합니다.`,
     "",
     "━━━━━━━━━━━━━━━━━━━━━",
     "✅ 자기평가지 제출 안내",
     "━━━━━━━━━━━━━━━━━━━━━",
     "",
-    `🔗 제출 링크`,
+    "🔗 제출 링크",
     url,
     "",
     `⏰ 제출 마감 : ${classDateFmt} ${deadTimeFmt}까지`,
@@ -303,119 +310,100 @@ async function generateMessage() {
   ];
 
   if (extraNote) {
-    msgLines.push("");
-    msgLines.push("━━━━━━━━━━━━━━━━━━━━━");
-    msgLines.push("📢 추가 공지사항");
-    msgLines.push("━━━━━━━━━━━━━━━━━━━━━");
-    msgLines.push("");
-    msgLines.push(extraNote);
+    msgLines.push(
+      "", "━━━━━━━━━━━━━━━━━━━━━",
+      "📢 추가 공지사항",
+      "━━━━━━━━━━━━━━━━━━━━━",
+      "", extraNote
+    );
   }
+  msgLines.push("", "수업 관련 문의는 선생님께 언제든지 연락 주세요! 🙏");
 
-  msgLines.push("");
-  msgLines.push("수업 관련 문의는 선생님께 언제든지 연락 주세요! 🙏");
-
-  const messageText = msgLines.join("\n");
-  state.currentMessage = messageText;
+  state.currentMessage  = msgLines.join("\n");
+  state.currentFormData = { classDate, deadTime, nextDate, nextTopic, submitUrl: url, extraNote };
 
   // 미리보기 업데이트
   const preview = document.getElementById("message-preview");
-  preview.textContent = messageText;
+  preview.textContent = state.currentMessage;
   preview.classList.remove("empty");
   document.getElementById("btn-copy-msg").disabled = false;
 
-  // QR도 자동 생성 (URL 입력되어 있으면)
+  // QR 자동 생성
   if (url && url !== state.currentQRUrl) generateQR();
 
-  // Firestore 저장
-  const btn = document.getElementById("btn-generate");
+  // 반 선택 카드 표시
+  const selectorCard = document.getElementById("class-selector-card");
+  selectorCard.style.display = "block";
+  renderClassCheckboxes();
+
+  setTimeout(() => selectorCard.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+}
+
+// ─── 선택한 반에 저장 ──────────────────────────────
+async function saveToSelectedClasses() {
+  if (!state.currentMessage || !state.currentFormData) {
+    alert("먼저 메시지를 생성해 주세요."); return;
+  }
+  if (!db) { alert("Firebase가 연결되지 않았습니다."); return; }
+
+  const checked = [...document.querySelectorAll(".class-checkbox:checked")];
+  if (checked.length === 0) {
+    alert("저장할 반을 하나 이상 선택해 주세요."); return;
+  }
+
+  const btn = document.getElementById("btn-save-classes");
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 저장 중…';
 
   try {
-    await addDoc(collection(db, "classes", state.selectedClassId, "messages"), {
-      classDate, deadTime, nextDate, nextTopic,
-      submitUrl: url, extraNote,
-      messageText,
-      createdAt: serverTimestamp(),
-    });
-    showToast("✓ 메시지가 저장되었습니다!");
-    await loadHistory();
-    loadMessageCount(state.selectedClassId);
+    await Promise.all(
+      checked.map(chk =>
+        addDoc(collection(db, "classes", chk.value, "messages"), {
+          ...state.currentFormData,
+          messageText: state.currentMessage,
+          createdAt: serverTimestamp(),
+        })
+      )
+    );
+
+    const classNames = checked.map(chk => {
+      const cls = state.classes.find(c => c.id === chk.value);
+      return cls?.name || "";
+    }).filter(Boolean);
+
+    showToast(`✓ [${classNames.join("] [") }]에 저장되었습니다!`);
+
+    // 카운트 새로고침
+    checked.forEach(chk => loadMessageCount(chk.value));
+
+    // 현재 보고 있는 히스토리 반이 포함돼 있으면 새로고침
+    if (state.selectedHistoryClassId &&
+        checked.find(c => c.value === state.selectedHistoryClassId)) {
+      loadSidebarHistory();
+    }
+
+    // 반 선택 카드 숨기기
+    document.getElementById("class-selector-card").style.display = "none";
+    state.currentFormData = null;
+
   } catch (e) {
     alert("저장 실패: " + e.message);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "✨ 메시지 생성 &amp; 저장";
+    btn.innerHTML = "💾 선택한 반에 저장";
   }
 }
 
-// ──────────────────────────────────────────────────
-//  히스토리
-// ──────────────────────────────────────────────────
-async function loadHistory() {
-  if (!db || !state.selectedClassId) return;
-  const el = document.getElementById("history-list");
-  el.innerHTML = `<div class="history-empty">불러오는 중…</div>`;
+function selectAllClasses()   { document.querySelectorAll(".class-checkbox").forEach(c => c.checked = true); }
+function deselectAllClasses() { document.querySelectorAll(".class-checkbox").forEach(c => c.checked = false); }
 
-  try {
-    const snap = await getDocs(
-      query(
-        collection(db, "classes", state.selectedClassId, "messages"),
-        orderBy("createdAt", "desc")
-      )
-    );
+// ─── 모달 (히스토리 상세) ──────────────────────────
+function openModal(docId, classId) {
+  state.modalDocId   = docId;
+  state.modalClassId = classId || state.selectedHistoryClassId;
 
-    if (snap.empty) {
-      el.innerHTML = `<div class="history-empty">아직 저장된 메시지가 없습니다.</div>`;
-      return;
-    }
-
-    el.innerHTML = snap.docs.map(d => {
-      const data = d.data();
-      const cd   = data.classDate ? formatDate(data.classDate) : "-";
-      const dt   = data.deadTime  ? formatTime(data.deadTime)  : "-";
-      const nd   = data.nextDate  ? formatDate(data.nextDate)  : "-";
-      const dayNum = data.classDate ? new Date(data.classDate).getDate() : "-";
-      const monStr = data.classDate ? formatMonthShort(data.classDate) : "";
-
-      return `
-        <div class="history-item" onclick="window._app.openModal('${d.id}')">
-          <div class="history-date">
-            <div class="date-day">${dayNum}</div>
-            <div class="date-mon">${monStr}</div>
-          </div>
-          <div class="history-info">
-            <div class="history-title">📋 ${cd} 수업 자기평가 안내</div>
-            <div class="history-meta">
-              <span>⏰ 마감 ${dt}</span>
-              <span>📅 다음 ${nd}</span>
-              <span>📚 ${escHtml(data.nextTopic || "-")}</span>
-            </div>
-          </div>
-          <div class="history-actions">
-            <button class="btn btn-secondary btn-sm"
-                    onclick="event.stopPropagation(); window._app.openModal('${d.id}')">
-              보기
-            </button>
-          </div>
-        </div>`;
-    }).join("");
-
-    // 문서 캐시 저장 (모달용)
-    window._historyDocs = {};
-    snap.docs.forEach(d => { window._historyDocs[d.id] = d.data(); });
-
-  } catch (e) {
-    el.innerHTML = `<div class="history-empty" style="color:var(--red);">로드 실패: ${e.message}</div>`;
-  }
-}
-
-// ──────────────────────────────────────────────────
-//  모달 (히스토리 상세)
-// ──────────────────────────────────────────────────
-function openModal(docId) {
-  state.modalDocId = docId;
-  const data = window._historyDocs?.[docId];
+  window._historyDocs = window._historyDocs || {};
+  const data = window._historyDocs[docId];
   if (!data) return;
 
   document.getElementById("modal-title").textContent =
@@ -423,11 +411,10 @@ function openModal(docId) {
   document.getElementById("modal-message-text").textContent = data.messageText || "";
   document.getElementById("modal-delete-btn").onclick = () => deleteHistoryItem(docId);
 
-  // 메타 정보 뱃지
   const meta = document.getElementById("modal-meta");
   meta.innerHTML = [
     data.deadTime  ? `<span class="badge badge-purple">⏰ 마감 ${formatTime(data.deadTime)}</span>` : "",
-    data.nextDate  ? `<span class="badge badge-teal">📅 다음 ${formatDate(data.nextDate)}</span>` : "",
+    data.nextDate  ? `<span class="badge badge-teal">📅 다음 ${formatDate(data.nextDate, "short")}</span>` : "",
     data.nextTopic ? `<span class="badge" style="background:#f0fdf4;color:#059669;">📚 ${escHtml(data.nextTopic)}</span>` : "",
   ].join("");
 
@@ -439,74 +426,61 @@ function closeModal(e) {
 }
 function closeModalDirect() {
   document.getElementById("history-modal").classList.remove("open");
-  state.modalDocId = null;
+  state.modalDocId = state.modalClassId = null;
 }
 
 function copyModalMessage() {
-  const text = document.getElementById("modal-message-text").textContent;
-  copyToClipboard(text);
+  copyToClipboard(document.getElementById("modal-message-text").textContent);
 }
 
-// 히스토리 데이터를 입력 폼에 불러오기
 function loadToForm() {
   const data = window._historyDocs?.[state.modalDocId];
   if (!data) return;
 
-  // 폼 필드에 저장된 값 채우기
-  if (data.classDate)  document.getElementById("f-class-date").value    = data.classDate;
-  if (data.deadTime)   document.getElementById("f-deadline-time").value  = data.deadTime;
-  if (data.submitUrl)  document.getElementById("f-submit-url").value     = data.submitUrl;
-  if (data.nextDate)   document.getElementById("f-next-date").value      = data.nextDate;
-  if (data.nextTopic)  document.getElementById("f-next-topic").value     = data.nextTopic;
+  if (data.classDate)  document.getElementById("f-class-date").value     = data.classDate;
+  if (data.deadTime)   document.getElementById("f-deadline-time").value   = data.deadTime;
+  if (data.submitUrl)  document.getElementById("f-submit-url").value      = data.submitUrl;
+  if (data.nextDate)   document.getElementById("f-next-date").value       = data.nextDate;
+  if (data.nextTopic)  document.getElementById("f-next-topic").value      = data.nextTopic;
   document.getElementById("f-extra-note").value = data.extraNote || "";
 
-  // QR도 자동 재생성
-  if (data.submitUrl) {
-    state.currentQRUrl = ""; // 강제 재생성
-    generateQR();
-  }
+  if (data.submitUrl) { state.currentQRUrl = ""; generateQR(); }
 
-  // 모달 닫기
   closeModalDirect();
-
-  // 폼 상단으로 부드럽게 스크롤
   document.querySelector(".card")?.scrollIntoView({ behavior: "smooth", block: "start" });
-
-  showToast("✅ 폼에 불러왔습니다! 수정 후 '메시지 생성 & 저장'을 눌러주세요.");
+  showToast("✅ 폼에 불러왔습니다! 수정 후 '메시지 생성'을 눌러주세요.");
 }
 
 async function deleteHistoryItem(docId) {
   if (!confirm("이 메시지를 삭제하시겠습니까?")) return;
-  if (!db || !state.selectedClassId) return;
-
+  if (!db) return;
+  const classId = state.modalClassId;
+  if (!classId) return;
   try {
-    await deleteDoc(doc(db, "classes", state.selectedClassId, "messages", docId));
+    await deleteDoc(doc(db, "classes", classId, "messages", docId));
     closeModalDirect();
-    await loadHistory();
-    loadMessageCount(state.selectedClassId);
+    loadSidebarHistory();
+    loadMessageCount(classId);
     showToast("🗑️ 삭제되었습니다.");
   } catch (e) {
     alert("삭제 실패: " + e.message);
   }
 }
 
-// ──────────────────────────────────────────────────
-//  유틸리티
-// ──────────────────────────────────────────────────
+// ─── 유틸리티 ──────────────────────────────────────
 function copyMessage() {
-  if (!state.currentMessage) return;
-  copyToClipboard(state.currentMessage);
+  if (state.currentMessage) copyToClipboard(state.currentMessage);
 }
 
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text)
     .then(() => showToast("✓ 클립보드에 복사되었습니다!"))
     .catch(() => {
-      // 폴백: textarea
       const ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);
-      ta.select(); document.execCommand("copy");
+      ta.select();
+      document.execCommand("copy");
       document.body.removeChild(ta);
       showToast("✓ 클립보드에 복사되었습니다!");
     });
@@ -522,63 +496,60 @@ function downloadQR() {
 }
 
 function resetForm() {
-  document.getElementById("f-submit-url").value  = "";
-  document.getElementById("f-next-topic").value  = "";
-  document.getElementById("f-extra-note").value  = "";
+  document.getElementById("f-submit-url").value    = "";
+  document.getElementById("f-next-topic").value    = "";
+  document.getElementById("f-extra-note").value    = "";
   document.getElementById("f-deadline-time").value = "23:59";
   setDefaultDates();
-  resetPreview();
-}
 
-function resetPreview() {
   const preview = document.getElementById("message-preview");
   preview.textContent = "메시지를 생성하면 여기에 미리보기가 표시됩니다.";
   preview.classList.add("empty");
-  document.getElementById("btn-copy-msg").disabled = true;
+  document.getElementById("btn-copy-msg").disabled    = true;
   document.getElementById("btn-download-qr").disabled = true;
   document.getElementById("qr-canvas-container").innerHTML =
     `<div class="qr-placeholder">URL을 입력하고<br/>'QR 생성'을 눌러주세요</div>`;
   document.getElementById("qr-url-hint").textContent = "";
-  state.currentMessage = "";
-  state.currentQRUrl   = "";
+  document.getElementById("class-selector-card").style.display = "none";
+
+  state.currentMessage  = "";
+  state.currentQRUrl    = "";
+  state.currentFormData = null;
+}
+
+function setDefaultDates() {
+  const today = new Date();
+  document.getElementById("f-class-date").value = today.toISOString().split("T")[0];
+  const next = new Date(today);
+  next.setDate(next.getDate() + 7);
+  document.getElementById("f-next-date").value = next.toISOString().split("T")[0];
 }
 
 function showToast(msg) {
   const toast = document.getElementById("copy-toast");
   toast.textContent = msg;
   toast.classList.add("show");
-  setTimeout(() => toast.classList.remove("show"), 2400);
+  setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
-// 날짜: "2026-09-13" → "2026년 9월 13일 (일)"
-function formatDate(dateStr) {
+// "2026-09-13" → full: "2026년 9월 13일 (일)" / short: "9/13(일)"
+function formatDate(dateStr, mode = "full") {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00");
   const days = ["일","월","화","수","목","금","토"];
+  if (mode === "short") {
+    return `${d.getMonth()+1}/${d.getDate()}(${days[d.getDay()]})`;
+  }
   return `${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${days[d.getDay()]})`;
 }
 
-// 월 약칭: "2026-09-13" → "9월"
-function formatMonthShort(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr + "T00:00:00");
-  return `${d.getMonth()+1}월`;
-}
-
-// 시간: "23:59" → "오후 11:59"
+// "23:59" → "오후 11:59"
 function formatTime(timeStr) {
   if (!timeStr) return "";
   const [h, m] = timeStr.split(":").map(Number);
   const period = h < 12 ? "오전" : "오후";
   const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${period} ${hour12}:${String(m).padStart(2,"0")}`;
-}
-
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1,3),16);
-  const g = parseInt(hex.slice(3,5),16);
-  const b = parseInt(hex.slice(5,7),16);
-  return `rgba(${r},${g},${b},${alpha})`;
+  return `${period} ${hour12}:${String(m).padStart(2, "0")}`;
 }
 
 function escHtml(str) {
@@ -587,29 +558,21 @@ function escHtml(str) {
     .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-// ──────────────────────────────────────────────────
-//  초기화 & 전역 노출
-// ──────────────────────────────────────────────────
+// ─── 초기화 ────────────────────────────────────────
 (async function init() {
+  setDefaultDates();
   const ok = await initFirebase();
   if (!ok) return;
   await loadClasses();
 })();
 
-// HTML onclick에서 호출할 수 있도록 전역 노출
+// 전역 노출
 window._app = {
-  addClass,
-  deleteClass,
-  selectClass,
-  generateQR,
-  generateMessage,
-  copyMessage,
-  downloadQR,
-  resetForm,
-  loadHistory,
-  openModal,
-  closeModal,
-  closeModalDirect,
-  copyModalMessage,
-  loadToForm,
+  addClass, deleteClass,
+  selectHistoryClass, loadSidebarHistory,
+  generateQR, generateMessage,
+  saveToSelectedClasses, selectAllClasses, deselectAllClasses,
+  copyMessage, downloadQR, resetForm,
+  openModal, closeModal, closeModalDirect,
+  copyModalMessage, loadToForm,
 };
